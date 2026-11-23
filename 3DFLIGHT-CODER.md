@@ -19,7 +19,10 @@ no build step, no modules). Read this spec top to bottom, then produce the file.
 - **HUD** (`#hud`, top-left, white monospace, text-shadow): shows
   `ALT: <span id="alt">0</span>m` and `SPD: <span id="spd">0</span>km/h`.
 - **Help bar** (`#help`, bottom-left, faint white monospace):
-  `W/S throttle   A/D yaw   Up/Down pitch   Left/Right roll`.
+  `W/S throttle   A/D yaw   Mouse pitch/roll (click to lock)`.
+- **Lock hint** (`#lock-hint`, centered, white monospace, text-shadow):
+  shows "Click to capture mouse" when pointer is NOT locked. Toggled via a
+  `.visible` CSS class (opacity 0→1 transition).
 - HUD spans are updated every frame: altitude = `Math.round(plane.position.y)`,
   speed = `Math.round(speed * 3.6)` (km/h).
 
@@ -86,20 +89,38 @@ Rotation uses **quaternion multiplication around the plane's local axes**
 don't couple. Each control surface also deflects while its key is held and
 springs back (lerp toward 0) when released.
 
+### Keyboard (left stick — throttle & yaw)
+
 | Input | Action | Axis / surface | Rate |
 |-------|--------|----------------|------|
 | `KeyW` | Throttle up | speed += 30*dt, clamp [15, 100] | — |
 | `KeyS` | Throttle down | speed -= 30*dt, clamp [15, 100] | — |
 | `KeyA` | Yaw left | local **Y** +, rudder deflects | 1.2 * dt |
 | `KeyD` | Yaw right | local **Y** -, rudder deflects | 1.2 * dt |
-| `ArrowUp` | Pitch | local **X** +, elevator deflects | 0.8 * dt |
-| `ArrowDown` | Pitch | local **X** -, elevator deflects | 0.8 * dt |
-| `ArrowLeft` | Roll | local **Z** -, ailerons deflect | 1.0 * dt |
-| `ArrowRight` | Roll | local **Z** +, ailerons deflect | 1.0 * dt |
 
-Control-surface deflection details:
-- Deflection rate `3 * dt`, clamped to `[-0.5, 0.5]` radians.
-- On release, spring back: `pivot.rotation *= (1 - 5 * dt)`.
+### Mouse (right stick — pitch & roll)
+
+Pointer-lock is **toggled by clicking the canvas**: click to capture, click
+again to release (Esc also releases). While locked, `mousemove` deltas
+(`e.movementX`, `e.movementY`) are accumulated per-frame into `mouseDX` /
+`mouseDY`, then consumed in the animate loop.
+
+| Mouse motion | Action | Axis / surface | Sensitivity |
+|-------------|--------|----------------|-------------|
+| Up (−Y) | Pitch up | local **X** +, elevator deflects | 0.0025 rad/px |
+| Down (+Y) | Pitch down | local **X** −, elevator deflects | 0.0025 rad/px |
+| Right (+X) | Roll right | local **Z** +, ailerons deflect | 0.003 rad/px |
+| Left (−X) | Roll left | local **Z** −, ailerons deflect | 0.003 rad/px |
+
+- Deltas are reset to 0 after each frame's application.
+- Control surfaces deflect proportionally to the applied rotation
+  (× 0.4), clamped to `[-0.5, 0.5]` radians.
+- Ailerons deflect opposite each other (same convention as keyboard).
+- Keyboard arrow keys for pitch/roll still work additively alongside mouse.
+
+### Control-surface deflection details (shared)
+- Keyboard deflection rate: `3 * dt`, clamped to `[-0.5, 0.5]` radians.
+- On release (keyboard), spring back: `pivot.rotation *= (1 - 5 * dt)`.
 - **Ailerons deflect opposite each other**: when rolling one way, one aileron's
   rotation.x goes positive while the other goes negative.
 
@@ -124,6 +145,8 @@ Control-surface deflection details:
   chase camera.
 - All Mode 2 controls work as specified, with visible elevator/rudder/aileron
   deflection and spring-back.
+- Mouse right-stick: click to lock pointer, move to pitch/roll, click again
+  (or Esc) to release. Lock hint appears/disappears accordingly.
 - The plane climbs/holds around speed 40, collides with the ground, and wraps
   at the world edges.
 - HUD altitude and speed update live; the page is responsive to resizing.

@@ -18,11 +18,21 @@
     color: rgba(255,255,255,.6); font: 12px monospace;
     pointer-events: none;
   }
+  #lock-hint {
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: #fff; font: 16px monospace;
+    text-shadow: 0 1px 4px #000;
+    pointer-events: none;
+    opacity: 0; transition: opacity .4s;
+  }
+  #lock-hint.visible { opacity: 1; }
 </style>
 </head>
 <body>
 <div id="hud">ALT: <span id="alt">0</span>m &nbsp; SPD: <span id="spd">0</span>km/h</div>
-<div id="help">W/S throttle &nbsp; A/D yaw &nbsp; Up/Down pitch &nbsp; Left/Right roll</div>
+<div id="help">W/S throttle &nbsp; A/D yaw &nbsp; Mouse pitch/roll (click to lock)</div>
+<div id="lock-hint">Click to capture mouse</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 // --- Scene ---
@@ -151,6 +161,29 @@ const keys = {};
 
 addEventListener('keydown', e => keys[e.code] = true);
 addEventListener('keyup', e => keys[e.code] = false);
+
+// --- Mouse (right-stick) ---
+let mouseDX = 0, mouseDY = 0;
+const lockHint = document.getElementById('lock-hint');
+
+renderer.domElement.addEventListener('click', () => {
+  if (document.pointerLockElement === renderer.domElement) {
+    document.exitPointerLock();
+  } else {
+    renderer.domElement.requestPointerLock();
+  }
+});
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  lockHint.classList.toggle('visible', !locked);
+});
+document.addEventListener('mousemove', e => {
+  if (document.pointerLockElement === renderer.domElement) {
+    mouseDX += e.movementX;
+    mouseDY += e.movementY;
+  }
+});
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -182,6 +215,25 @@ function animate() {
   if (keys['ArrowLeft'])  { q.setFromAxisAngle(new THREE.Vector3(0,0,1), -1.0 * dt); plane.quaternion.multiply(q); leftAileronPivot.rotation.x = Math.max(leftAileronPivot.rotation.x - 3 * dt, -0.5); rightAileronPivot.rotation.x = Math.min(rightAileronPivot.rotation.x + 3 * dt, 0.5); }
   if (keys['ArrowRight']) { q.setFromAxisAngle(new THREE.Vector3(0,0,1),  1.0 * dt); plane.quaternion.multiply(q); leftAileronPivot.rotation.x = Math.min(leftAileronPivot.rotation.x + 3 * dt, 0.5); rightAileronPivot.rotation.x = Math.max(rightAileronPivot.rotation.x - 3 * dt, -0.5); }
   if (!keys['ArrowLeft'] && !keys['ArrowRight']) { leftAileronPivot.rotation.x *= (1 - 5 * dt); rightAileronPivot.rotation.x *= (1 - 5 * dt); }
+
+  // Mouse right-stick (pitch & roll)
+  if (mouseDY !== 0 || mouseDX !== 0) {
+    const pitchIn = -mouseDY * 0.0025;   // up = pitch up
+    const rollIn  =  mouseDX * 0.003;    // right = roll right
+    if (Math.abs(pitchIn) > 1e-4) {
+      q.setFromAxisAngle(new THREE.Vector3(1,0,0), pitchIn);
+      plane.quaternion.multiply(q);
+      elevatorPivot.rotation.x = THREE.MathUtils.clamp(elevatorPivot.rotation.x + pitchIn * 0.4, -0.5, 0.5);
+    }
+    if (Math.abs(rollIn) > 1e-4) {
+      q.setFromAxisAngle(new THREE.Vector3(0,0,1), rollIn);
+      plane.quaternion.multiply(q);
+      leftAileronPivot.rotation.x  = THREE.MathUtils.clamp(leftAileronPivot.rotation.x  - rollIn * 0.4, -0.5, 0.5);
+      rightAileronPivot.rotation.x = THREE.MathUtils.clamp(rightAileronPivot.rotation.x + rollIn * 0.4, -0.5, 0.5);
+    }
+    mouseDX = 0;
+    mouseDY = 0;
+  }
 
   // Move
   const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(plane.quaternion);

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Sky Flight</title>
+<style>
+*{margin:0;padding:0}
+body{overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{display:block}
+#hud{position:fixed;top:12px;left:12px;color:#fff;font:14px/1.6 monospace;text-shadow:0 1px 3px #000;pointer-events:none;z-index:10}
+#help{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);color:rgba(255,255,255,.5);font:11px monospace;pointer-events:none;z-index:10;white-space:nowrap}
+.stick{position:fixed;bottom:50px;width:120px;height:120px;pointer-events:none;z-index:10}
+#stick-left{left:30px}
+#stick-right{right:30px}
+.stick-base{position:absolute;width:100%;height:100%;border-radius:50%;border:2px solid rgba(255,255,255,.25);background:rgba(255,255,255,.05)}
+.stick-base::before,.stick-base::after{content:'';position:absolute;background:rgba(255,255,255,.15)}
+.stick-base::before{width:1px;height:40%;left:50%;top:30%}
+.stick-base::after{height:1px;width:40%;top:50%;left:30%}
+.stick-knob{position:absolute;width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,.35);border:2px solid rgba(255,255,255,.5);top:50%;left:50%;transform:translate(-50%,-50%)}
+.stick-label{position:absolute;bottom:-18px;width:100%;text-align:center;color:rgba(255,255,255,.35);font:10px monospace}
+#fs-btn{position:fixed;top:12px;right:12px;z-index:20;background:rgba(0,0,0,.4);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;font:12px monospace;padding:6px 10px;cursor:pointer;pointer-events:auto}
+#fs-btn:active{background:rgba(255,255,255,.2)}
+</style>
+</head>
+<body>
+<div id="hud">ALT: <span id="alt">0</span>m &nbsp; SPD: <span id="spd">0</span>km/h</div>
+<button id="fs-btn">⛶ Fullscreen</button>
+<div id="help">Left: throttle / yaw &nbsp;&nbsp; Right: pitch / roll</div>
+<div class="stick" id="stick-left">
+  <div class="stick-base"></div>
+  <div class="stick-knob" id="knob-left"></div>
+  <div class="stick-label">THR / YAW</div>
+</div>
+<div class="stick" id="stick-right">
+  <div class="stick-base"></div>
+  <div class="stick-knob" id="knob-right"></div>
+  <div class="stick-label">PITCH / ROLL</div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// --- Scene ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 300, 1200);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.1, 2000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+document.body.appendChild(renderer.domElement);
+
+// --- Lights ---
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.0);
+sun.position.set(100, 200, 100);
+scene.add(sun);
+
+// --- Sea ---
+const seaGeo = new THREE.PlaneGeometry(4000, 4000, 64, 64);
+const seaMat = new THREE.MeshPhongMaterial({ color: 0x1a6b8a, shininess: 80 });
+const sea = new THREE.Mesh(seaGeo, seaMat);
+sea.rotation.x = -Math.PI / 2;
+scene.add(sea);
+
+// --- Mountains ---
+const mtMat = new THREE.MeshLambertMaterial({ color: 0x5a7a5a });
+for (let i = 0; i < 60; i++) {
+  const h = 20 + Math.random() * 60;
+  const r = 15 + Math.random() * 30;
+  const mt = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5 + Math.floor(Math.random()*3)), mtMat);
+  mt.position.set((Math.random()-0.5)*1800, h/2 - 2, (Math.random()-0.5)*1800);
+  mt.rotation.y = Math.random() * Math.PI;
+  scene.add(mt);
+}
+
+// --- Clouds ---
+const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+function makeCloud(x, y, z) {
+  const cloud = new THREE.Group();
+  const puffs = 4 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < puffs; i++) {
+    const r = 8 + Math.random() * 10;
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 8), cloudMat);
+    puff.position.set((Math.random()-0.5)*30, (Math.random()-0.5)*8, (Math.random()-0.5)*20);
+    puff.scale.y = 0.6;
+    cloud.add(puff);
+  }
+  cloud.position.set(x, y, z);
+  scene.add(cloud);
+}
+for (let i = 0; i < 18; i++) {
+  makeCloud((Math.random()-0.5)*1800, 60 + Math.random()*180, (Math.random()-0.5)*1800);
+}
+
+// --- Plane ---
+const plane = new THREE.Group();
+const bodyMat = new THREE.MeshPhongMaterial({ color: 0xdd3333 });
+const wingMat = new THREE.MeshPhongMaterial({ color: 0xbb2222 });
+
+const fuselage = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 6), bodyMat);
+plane.add(fuselage);
+
+const wingCenter = new THREE.Mesh(new THREE.BoxGeometry(6, 0.15, 1.8), wingMat);
+wingCenter.position.z = 0.5;
+plane.add(wingCenter);
+
+const wingLeft = new THREE.Mesh(new THREE.BoxGeometry(2, 0.15, 1.1), wingMat);
+wingLeft.position.set(-4, 0, 0.85);
+plane.add(wingLeft);
+
+const wingRight = new THREE.Mesh(new THREE.BoxGeometry(2, 0.15, 1.1), wingMat);
+wingRight.position.set(4, 0, 0.85);
+plane.add(wingRight);
+
+const tail = new THREE.Mesh(new THREE.BoxGeometry(3, 0.1, 1), wingMat);
+tail.position.z = -2.8;
+plane.add(tail);
+
+const fin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 1), wingMat);
+fin.position.set(0, 0.75, -2.8);
+plane.add(fin);
+
+const elevatorPivot = new THREE.Group();
+elevatorPivot.position.set(0, 0, -2.8);
+const elevator = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 0.8), bodyMat);
+elevator.position.z = -0.4;
+elevatorPivot.add(elevator);
+plane.add(elevatorPivot);
+
+const rudderPivot = new THREE.Group();
+rudderPivot.position.set(0, 0.75, -2.8);
+const rudder = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.2, 0.8), bodyMat);
+rudder.position.z = -0.4;
+rudderPivot.add(rudder);
+plane.add(rudderPivot);
+
+const leftAileronPivot = new THREE.Group();
+leftAileronPivot.position.set(-4, 0.08, 0.3);
+const leftAileron = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 0.8), bodyMat);
+leftAileron.position.z = -0.4;
+leftAileronPivot.add(leftAileron);
+plane.add(leftAileronPivot);
+
+const rightAileronPivot = new THREE.Group();
+rightAileronPivot.position.set(4, 0.08, 0.3);
+const rightAileron = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 0.8), bodyMat);
+rightAileron.position.z = -0.4;
+rightAileronPivot.add(rightAileron);
+plane.add(rightAileronPivot);
+
+plane.position.set(0, 50, 0);
+scene.add(plane);
+
+// Chase camera
+camera.position.set(0, 4, -14);
+camera.rotation.y = Math.PI;
+plane.add(camera);
+
+// --- Fullscreen ---
+const fsBtn = document.getElementById('fs-btn');
+fsBtn.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
+fsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const el = document.body;
+  if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+    (el.requestFullscreen || el.webkitRequestFullscreen).call(el, { navigationUI: 'hide' });
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  }
+});
+document.addEventListener('fullscreenchange', () => {
+  fsBtn.style.display = document.fullscreenElement ? 'none' : '';
+});
+document.addEventListener('webkitfullscreenchange', () => {
+  fsBtn.style.display = document.webkitFullscreenElement ? 'none' : '';
+});
+
+// --- State ---
+let speed = 40;
+
+// --- Touch joysticks ---
+const MAX_DEFLECT = 50;
+const sticks = {
+  left:  { active: false, touchId: null, nx: 0, ny: 0 },
+  right: { active: false, touchId: null, nx: 0, ny: 0 }
+};
+const knobs = {
+  left:  document.getElementById('knob-left'),
+  right: document.getElementById('knob-right')
+};
+const bases = {
+  left:  document.getElementById('stick-left'),
+  right: document.getElementById('stick-right')
+};
+
+function stickCenter(side) {
+  const r = bases[side].getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+function setKnob(side, dx, dy) {
+  knobs[side].style.transform =
+    `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+}
+
+function onTouchStart(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    const side = t.clientX < innerWidth / 2 ? 'left' : 'right';
+    if (!sticks[side].active) {
+      sticks[side].active = true;
+      sticks[side].touchId = t.identifier;
+      sticks[side].nx = 0;
+      sticks[side].ny = 0;
+      setKnob(side, 0, 0);
+    }
+  }
+}
+
+function onTouchMove(e) {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    for (const side of ['left', 'right']) {
+      const s = sticks[side];
+      if (s.active && s.touchId === t.identifier) {
+        const c = stickCenter(side);
+        let dx = t.clientX - c.x;
+        let dy = t.clientY - c.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > MAX_DEFLECT) {
+          dx = dx / dist * MAX_DEFLECT;
+          dy = dy / dist * MAX_DEFLECT;
+        }
+        s.nx = dx / MAX_DEFLECT;
+        s.ny = -dy / MAX_DEFLECT;
+        setKnob(side, dx, dy);
+      }
+    }
+  }
+}
+
+function onTouchEnd(e) {
+  for (const t of e.changedTouches) {
+    for (const side of ['left', 'right']) {
+      const s = sticks[side];
+      if (s.active && s.touchId === t.identifier) {
+        s.active = false;
+        s.touchId = null;
+        s.nx = 0;
+        s.ny = 0;
+        setKnob(side, 0, 0);
+      }
+    }
+  }
+}
+
+document.addEventListener('touchstart', onTouchStart, { passive: false });
+document.addEventListener('touchmove', onTouchMove, { passive: false });
+document.addEventListener('touchend', onTouchEnd, { passive: false });
+document.addEventListener('touchcancel', onTouchEnd, { passive: false });
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// --- Loop ---
+const clock = new THREE.Clock();
+const q = new THREE.Quaternion();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // Left stick: throttle & yaw
+  const ls = sticks.left;
+  if (ls.active) {
+    if (Math.abs(ls.ny) > 0.05) {
+      speed = THREE.MathUtils.clamp(speed + 30 * ls.ny * dt, 15, 100);
+    }
+    if (Math.abs(ls.nx) > 0.05) {
+      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), -ls.nx * 1.0 * dt);
+      plane.quaternion.multiply(q);
+      rudderPivot.rotation.y = THREE.MathUtils.clamp(
+        rudderPivot.rotation.y + ls.nx * 3 * dt, -0.5, 0.5);
+    }
+  }
+  if (!ls.active) rudderPivot.rotation.y *= (1 - 5 * dt);
+
+  // Right stick: pitch & roll
+  const rs = sticks.right;
+  if (rs.active) {
+    if (Math.abs(rs.ny) > 0.05) {
+      q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), rs.ny * 1.2 * dt);
+      plane.quaternion.multiply(q);
+      elevatorPivot.rotation.x = THREE.MathUtils.clamp(
+        elevatorPivot.rotation.x - rs.ny * 3 * dt, -0.5, 0.5);
+    }
+    if (Math.abs(rs.nx) > 0.05) {
+      q.setFromAxisAngle(new THREE.Vector3(0, 0, 1), rs.nx * 1.5 * dt);
+      plane.quaternion.multiply(q);
+      leftAileronPivot.rotation.x = THREE.MathUtils.clamp(
+        leftAileronPivot.rotation.x + rs.nx * 3 * dt, -0.5, 0.5);
+      rightAileronPivot.rotation.x = THREE.MathUtils.clamp(
+        rightAileronPivot.rotation.x - rs.nx * 3 * dt, -0.5, 0.5);
+    }
+  }
+  if (!rs.active) {
+    elevatorPivot.rotation.x *= (1 - 5 * dt);
+    leftAileronPivot.rotation.x *= (1 - 5 * dt);
+    rightAileronPivot.rotation.x *= (1 - 5 * dt);
+  }
+
+  // Move
+  const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(plane.quaternion);
+  plane.position.addScaledVector(dir, speed * dt);
+
+  // Gravity / lift
+  plane.position.y -= 5 * dt;
+  plane.position.y += speed * 0.15 * dt;
+
+  // Ground collision
+  if (plane.position.y < 2) {
+    plane.position.y = 2;
+    speed = Math.max(speed - 40 * dt, 0);
+  }
+
+  // Wrap around
+  if (Math.abs(plane.position.x) > 2000) plane.position.x *= -0.9;
+  if (Math.abs(plane.position.z) > 2000) plane.position.z *= -0.9;
+  if (plane.position.y > 500) plane.position.y = 500;
+
+  // Animate sea
+  const pos = seaGeo.attributes.position;
+  const t = clock.elapsedTime;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i);
+    pos.setZ(i, Math.sin(x * 0.02 + t) * 1.5 + Math.cos(y * 0.025 + t * 0.7) * 1.5);
+  }
+  pos.needsUpdate = true;
+  seaGeo.computeVertexNormals();
+
+  // HUD
+  document.getElementById('alt').textContent = Math.round(plane.position.y);
+  document.getElementById('spd').textContent = Math.round(speed * 3.6);
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
