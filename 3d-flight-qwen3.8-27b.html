@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sky Flight</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { overflow: hidden; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; top: 16px; left: 16px;
+    color: #fff; font: 14px/1.6 monospace;
+    text-shadow: 0 1px 3px #000;
+    pointer-events: none;
+  }
+  #help {
+    position: fixed; bottom: 16px; left: 16px;
+    color: rgba(255,255,255,.6); font: 12px monospace;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="hud">ALT: <span id="alt">0</span>m &nbsp; SPD: <span id="spd">0</span>km/h</div>
+<div id="help">W/S throttle &nbsp; A/D yaw &nbsp; Up/Down pitch &nbsp; Left/Right roll</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// --- Scene ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 300, 1200);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.1, 2000);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+
+// --- Lights ---
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+const sun = new THREE.DirectionalLight(0xfff4e0, 1.0);
+sun.position.set(100, 200, 100);
+scene.add(sun);
+
+// --- Sea ---
+const seaGeo = new THREE.PlaneGeometry(4000, 4000, 64, 64);
+const seaMat = new THREE.MeshPhongMaterial({ color: 0x1a6b8a, shininess: 80 });
+const sea = new THREE.Mesh(seaGeo, seaMat);
+sea.rotation.x = -Math.PI / 2;
+scene.add(sea);
+
+// --- Mountains ---
+const mtMat = new THREE.MeshLambertMaterial({ color: 0x5a7a5a });
+for (let i = 0; i < 60; i++) {
+  const h = 20 + Math.random() * 60;
+  const r = 15 + Math.random() * 30;
+  const mt = new THREE.Mesh(new THREE.ConeGeometry(r, h, 5 + Math.floor(Math.random()*3)), mtMat);
+  mt.position.set((Math.random()-0.5)*1800, h/2 - 2, (Math.random()-0.5)*1800);
+  mt.rotation.y = Math.random() * Math.PI;
+  scene.add(mt);
+}
+
+// --- Clouds ---
+const cloudMat = new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.9 });
+function makeCloud(x, y, z) {
+  const cloud = new THREE.Group();
+  const puffs = 4 + Math.floor(Math.random() * 4);
+  for (let i = 0; i < puffs; i++) {
+    const r = 8 + Math.random() * 10;
+    const puff = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 8), cloudMat);
+    puff.position.set((Math.random()-0.5)*30, (Math.random()-0.5)*8, (Math.random()-0.5)*20);
+    puff.scale.y = 0.6; // flatten into a puff
+    cloud.add(puff);
+  }
+  cloud.position.set(x, y, z);
+  scene.add(cloud);
+}
+for (let i = 0; i < 18; i++) {
+  makeCloud((Math.random()-0.5)*1800, 60 + Math.random()*180, (Math.random()-0.5)*1800);
+}
+
+// --- Plane (simple) ---
+const plane = new THREE.Group();
+const bodyMat = new THREE.MeshPhongMaterial({ color: 0xdd3333 });
+const wingMat = new THREE.MeshPhongMaterial({ color: 0xbb2222 });
+
+const fuselage = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.2, 6), bodyMat);
+plane.add(fuselage);
+
+// Wing — split so the rear outer sections are left open for the ailerons
+const wingCenter = new THREE.Mesh(new THREE.BoxGeometry(6, 0.15, 1.8), wingMat);
+wingCenter.position.z = 0.5;
+plane.add(wingCenter);
+
+const wingLeft = new THREE.Mesh(new THREE.BoxGeometry(2, 0.15, 1.1), wingMat);
+wingLeft.position.set(-4, 0, 0.85); // front portion only (z 0.3 → 1.4)
+plane.add(wingLeft);
+
+const wingRight = new THREE.Mesh(new THREE.BoxGeometry(2, 0.15, 1.1), wingMat);
+wingRight.position.set(4, 0, 0.85); // front portion only (z 0.3 → 1.4)
+plane.add(wingRight);
+
+const tail = new THREE.Mesh(new THREE.BoxGeometry(3, 0.1, 1), wingMat);
+tail.position.z = -2.8;
+plane.add(tail);
+
+const fin = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.5, 1), wingMat);
+fin.position.set(0, 0.75, -2.8);
+plane.add(fin);
+
+const elevatorPivot = new THREE.Group();
+elevatorPivot.position.set(0, 0, -2.8);
+const elevator = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.1, 0.8), bodyMat);
+elevator.position.z = -0.4;
+elevatorPivot.add(elevator);
+plane.add(elevatorPivot);
+
+const rudderPivot = new THREE.Group();
+rudderPivot.position.set(0, 0.75, -2.8);
+const rudder = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.2, 0.8), bodyMat);
+rudder.position.z = -0.4; // extends backward from hinge
+rudderPivot.add(rudder);
+plane.add(rudderPivot);
+
+// Ailerons — one per wing trailing edge, pivot at leading edge
+const leftAileronPivot = new THREE.Group();
+leftAileronPivot.position.set(-4, 0.08, 0.3); // sits on wing's rear chord
+const leftAileron = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 0.8), bodyMat);
+leftAileron.position.z = -0.4; // extends backward from hinge
+leftAileronPivot.add(leftAileron);
+plane.add(leftAileronPivot);
+
+const rightAileronPivot = new THREE.Group();
+rightAileronPivot.position.set(4, 0.08, 0.3); // sits on wing's rear chord
+const rightAileron = new THREE.Mesh(new THREE.BoxGeometry(2, 0.1, 0.8), bodyMat);
+rightAileron.position.z = -0.4; // extends backward from hinge
+rightAileronPivot.add(rightAileron);
+plane.add(rightAileronPivot);
+
+plane.position.set(0, 50, 0);
+scene.add(plane);
+
+// Camera as child of plane — fixed behind
+camera.position.set(0, 4, -14);
+camera.rotation.y = Math.PI;
+plane.add(camera);
+
+// --- State ---
+let speed = 40;
+const keys = {};
+
+addEventListener('keydown', e => keys[e.code] = true);
+addEventListener('keyup', e => keys[e.code] = false);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// --- Loop ---
+const clock = new THREE.Clock();
+const camOffset = new THREE.Vector3(0, 3, -10);
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // Controls — quaternion rotation (local axes, no coupling) — Mode 2
+  const q = new THREE.Quaternion();
+  // Throttle — W/S
+  if (keys['KeyW']) speed = Math.min(speed + 30 * dt, 100);
+  if (keys['KeyS']) speed = Math.max(speed - 30 * dt, 15);
+  // Pitch — Arrow Up/Down (elevator)
+  if (keys['ArrowUp'])   { q.setFromAxisAngle(new THREE.Vector3(1,0,0),  0.8 * dt); plane.quaternion.multiply(q); elevatorPivot.rotation.x = Math.max(elevatorPivot.rotation.x - 3 * dt, -0.5); }
+  if (keys['ArrowDown']) { q.setFromAxisAngle(new THREE.Vector3(1,0,0), -0.8 * dt); plane.quaternion.multiply(q); elevatorPivot.rotation.x = Math.min(elevatorPivot.rotation.x + 3 * dt, 0.5); }
+  if (!keys['ArrowUp'] && !keys['ArrowDown']) elevatorPivot.rotation.x *= (1 - 5 * dt);
+  // Yaw — A/D (rudder)
+  if (keys['KeyA']) { q.setFromAxisAngle(new THREE.Vector3(0,1,0),  0.7 * dt); plane.quaternion.multiply(q); rudderPivot.rotation.y = Math.max(rudderPivot.rotation.y - 3 * dt, -0.5); }
+  if (keys['KeyD']) { q.setFromAxisAngle(new THREE.Vector3(0,1,0), -0.7 * dt); plane.quaternion.multiply(q); rudderPivot.rotation.y = Math.min(rudderPivot.rotation.y + 3 * dt, 0.5); }
+  if (!keys['KeyA'] && !keys['KeyD']) rudderPivot.rotation.y *= (1 - 5 * dt);
+  // Roll — Arrow Left/Right (aileron deflection)
+  if (keys['ArrowLeft'])  { q.setFromAxisAngle(new THREE.Vector3(0,0,1), -1.0 * dt); plane.quaternion.multiply(q); leftAileronPivot.rotation.x = Math.max(leftAileronPivot.rotation.x - 3 * dt, -0.5); rightAileronPivot.rotation.x = Math.min(rightAileronPivot.rotation.x + 3 * dt, 0.5); }
+  if (keys['ArrowRight']) { q.setFromAxisAngle(new THREE.Vector3(0,0,1),  1.0 * dt); plane.quaternion.multiply(q); leftAileronPivot.rotation.x = Math.min(leftAileronPivot.rotation.x + 3 * dt, 0.5); rightAileronPivot.rotation.x = Math.max(rightAileronPivot.rotation.x - 3 * dt, -0.5); }
+  if (!keys['ArrowLeft'] && !keys['ArrowRight']) { leftAileronPivot.rotation.x *= (1 - 5 * dt); rightAileronPivot.rotation.x *= (1 - 5 * dt); }
+
+  // Move
+  const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(plane.quaternion);
+  plane.position.addScaledVector(dir, speed * dt);
+
+  // Gravity / lift
+  plane.position.y -= 5 * dt;
+  // Lift proportional to speed (net positive at speed 40)
+  plane.position.y += speed * 0.15 * dt;
+
+  // Ground collision
+  if (plane.position.y < 2) {
+    plane.position.y = 2;
+    speed = Math.max(speed - 40 * dt, 0);
+  }
+
+  // Wrap around
+  if (Math.abs(plane.position.x) > 2000) plane.position.x *= -0.9;
+  if (Math.abs(plane.position.z) > 2000) plane.position.z *= -0.9;
+  if (plane.position.y > 500) plane.position.y = 500;
+
+
+
+  // Animate sea
+  const pos = seaGeo.attributes.position;
+  const t = clock.elapsedTime;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i);
+    pos.setZ(i, Math.sin(x * 0.02 + t) * 1.5 + Math.cos(y * 0.025 + t * 0.7) * 1.5);
+  }
+  pos.needsUpdate = true;
+  seaGeo.computeVertexNormals();
+
+  // HUD
+  document.getElementById('alt').textContent = Math.round(plane.position.y);
+  document.getElementById('spd').textContent = Math.round(speed * 3.6);
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
