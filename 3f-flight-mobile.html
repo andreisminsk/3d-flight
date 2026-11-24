@@ -157,6 +157,58 @@ camera.position.set(0, 4, -14);
 camera.rotation.y = Math.PI;
 plane.add(camera);
 
+// --- Vapor Contrail Particles ---
+const PCOUNT = 300;
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(PCOUNT * 3);
+const pAlpha = new Float32Array(PCOUNT);
+const pSize = new Float32Array(PCOUNT);
+const pVel = new Float32Array(PCOUNT * 3);
+const pLife = new Float32Array(PCOUNT);
+const pMaxLife = new Float32Array(PCOUNT);
+const pBaseAlpha = new Float32Array(PCOUNT);
+let pIdx = 0;
+
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+pGeo.setAttribute('alpha', new THREE.BufferAttribute(pAlpha, 1));
+pGeo.setAttribute('size', new THREE.BufferAttribute(pSize, 1));
+
+const pMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.NormalBlending,
+  vertexShader: `
+    attribute float alpha;
+    attribute float size;
+    varying float vA;
+    void main() {
+      vA = alpha;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = size * (280.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }
+  `,
+  fragmentShader: `
+    varying float vA;
+    void main() {
+      float d = length(gl_PointCoord - 0.5);
+      if (d > 0.5) discard;
+      float soft = 1.0 - smoothstep(0.15, 0.5, d);
+      gl_FragColor = vec4(1.0, 1.0, 1.0, vA * soft);
+    }
+  `
+});
+
+const particles = new THREE.Points(pGeo, pMat);
+particles.frustumCulled = false;
+scene.add(particles);
+
+for (let i = 0; i < PCOUNT; i++) {
+  pLife[i] = 0;
+  pAlpha[i] = 0;
+  pPos[i*3+1] = -9999;
+}
+
 // --- Fullscreen ---
 const fsBtn = document.getElementById('fs-btn');
 fsBtn.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
@@ -178,6 +230,9 @@ document.addEventListener('webkitfullscreenchange', () => {
 
 // --- State ---
 let speed = 40;
+let camDist = 14;
+let pinchDist = 0;
+const touchPoints = new Map();
 
 // --- Touch joysticks ---
 const MAX_DEFLECT = 50;
@@ -207,6 +262,7 @@ function setKnob(side, dx, dy) {
 function onTouchStart(e) {
   e.preventDefault();
   for (const t of e.changedTouches) {
+    touchPoints.set(t.identifier, { x: t.clientX, y: t.clientY });
     const side = t.clientX < innerWidth / 2 ? 'left' : 'right';
     if (!sticks[side].active) {
       sticks[side].active = true;
@@ -216,11 +272,18 @@ function onTouchStart(e) {
       setKnob(side, 0, 0);
     }
   }
+  if (touchPoints.size === 2) {
+    const pts = [...touchPoints.values()];
+    pinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
 }
 
 function onTouchMove(e) {
   e.preventDefault();
   for (const t of e.changedTouches) {
+    if (touchPoints.has(t.identifier)) {
+      touchPoints.set(t.identifier, { x: t.clientX, y: t.clientY });
+    }
     for (const side of ['left', 'right']) {
       const s = sticks[side];
       if (s.active && s.touchId === t.identifier) {
@@ -238,10 +301,19 @@ function onTouchMove(e) {
       }
     }
   }
+  if (touchPoints.size >= 2) {
+    const pts = [...touchPoints.values()];
+    const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (pinchDist > 0) {
+      camDist = THREE.MathUtils.clamp(camDist - (newDist - pinchDist) * 0.05, 5, 40);
+    }
+    pinchDist = newDist;
+  }
 }
 
 function onTouchEnd(e) {
   for (const t of e.changedTouches) {
+    touchPoints.delete(t.identifier);
     for (const side of ['left', 'right']) {
       const s = sticks[side];
       if (s.active && s.touchId === t.identifier) {
@@ -253,6 +325,7 @@ function onTouchEnd(e) {
       }
     }
   }
+  if (touchPoints.size < 2) pinchDist = 0;
 }
 
 document.addEventListener('touchstart', onTouchStart, { passive: false });
@@ -313,6 +386,9 @@ function animate() {
     rightAileronPivot.rotation.x *= (1 - 5 * dt);
   }
 
+  // Camera zoom
+  camera.position.set(0, 4 * (camDist / 14), -camDist);
+
   // Move
   const dir = new THREE.Vector3(0, 0, 1).applyQuaternion(plane.quaternion);
   plane.position.addScaledVector(dir, speed * dt);
@@ -331,6 +407,65 @@ function animate() {
   if (Math.abs(plane.position.x) > 2000) plane.position.x *= -0.9;
   if (Math.abs(plane.position.z) > 2000) plane.position.z *= -0.9;
   if (plane.position.y > 500) plane.position.y = 500;
+
+  // --- Vapor Contrail ---
+  const rollDef  = Math.abs(leftAileronPivot.rotation.x) + Math.abs(rightAileronPivot.rotation.x);
+  const pitchDef = Math.abs(elevatorPivot.rotation.x);
+  const totalDef = rollDef + pitchDef;
+
+  if (totalDef > 0.03) {
+    plane.updateMatrixWorld(true);
+    const tailWP = new THREE.Vector3(0, 0, -3.2).applyMatrix4(plane.matrixWorld);
+    const laWP   = new THREE.Vector3(-4.8, 0, -0.3).applyMatrix4(plane.matrixWorld);
+    const raWP   = new THREE.Vector3( 4.8, 0, -0.3).applyMatrix4(plane.matrixWorld);
+    const fwd    = new THREE.Vector3(0, 0, 1).applyQuaternion(plane.quaternion);
+
+    const intensity = Math.min(totalDef / 0.5, 1.0);
+    let toSpawn = intensity * 140 * dt;
+    let whole = Math.floor(toSpawn);
+    if (Math.random() < toSpawn - whole) whole++;
+
+    for (let s = 0; s < whole; s++) {
+      const i = pIdx;
+      pIdx = (pIdx + 1) % PCOUNT;
+
+      let sp;
+      if (rollDef > 0.03 && (pitchDef < 0.03 || Math.random() < rollDef / totalDef)) {
+        sp = Math.random() < 0.5 ? laWP : raWP;
+      } else {
+        sp = tailWP;
+      }
+
+      const spread = 0.4;
+      pPos[i*3]   = sp.x + (Math.random()-0.5)*spread;
+      pPos[i*3+1] = sp.y + (Math.random()-0.5)*spread;
+      pPos[i*3+2] = sp.z + (Math.random()-0.5)*spread;
+
+      pVel[i*3]   = -fwd.x * 4 + (Math.random()-0.5)*1.5;
+      pVel[i*3+1] = -fwd.y * 4 + (Math.random()-0.5)*0.5;
+      pVel[i*3+2] = -fwd.z * 4 + (Math.random()-0.5)*1.5;
+
+      pLife[i]      = 1.0;
+      pMaxLife[i]   = 0.6 + Math.random() * 0.6;
+      pSize[i]      = 1.5 + Math.random() * 2.5;
+      pBaseAlpha[i] = 0.35 + intensity * 0.55;
+    }
+  }
+
+  for (let i = 0; i < PCOUNT; i++) {
+    if (pLife[i] <= 0) { pAlpha[i] = 0; continue; }
+    pLife[i] -= dt / pMaxLife[i];
+    if (pLife[i] < 0) pLife[i] = 0;
+    pPos[i*3]   += pVel[i*3]   * dt;
+    pPos[i*3+1] += pVel[i*3+1] * dt;
+    pPos[i*3+2] += pVel[i*3+2] * dt;
+    pAlpha[i] = pLife[i] * pBaseAlpha[i];
+    pSize[i] += 3 * dt;
+  }
+
+  pGeo.attributes.position.needsUpdate = true;
+  pGeo.attributes.alpha.needsUpdate = true;
+  pGeo.attributes.size.needsUpdate = true;
 
   // Animate sea
   const pos = seaGeo.attributes.position;
